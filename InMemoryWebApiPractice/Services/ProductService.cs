@@ -1,12 +1,15 @@
 using InMemoryWebApiPractice.DTOs;
+using InMemoryWebApiPractice.Extensions;
 using InMemoryWebApiPractice.Models;
 using InMemoryWebApiPractice.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
 
 namespace InMemoryWebApiPractice.Services;
 
-public class ProductService(AppDbContext context, IMemoryCache cache, ILogger<ProductService> logger) : IProductService
+public class ProductService(AppDbContext context, IDistributedCache cache, ILogger<ProductService> logger)
+    : IProductService
 {
     public async Task Add(ProductCreationDto request)
     {
@@ -16,53 +19,38 @@ public class ProductService(AppDbContext context, IMemoryCache cache, ILogger<Pr
         // invalidate cache for products, as new product is added
         var cacheKey = "products";
         logger.LogInformation("invalidating cache for key: {CacheKey} from cache.", cacheKey);
-        cache.Remove(cacheKey);//Manual Invalidation ->  ensuring that the list of products is removed from the cache.
+        cache.Remove(cacheKey); //Manual Invalidation ->  ensuring that the list of products is removed from the cache.
     }
 
     public async Task<Product> Get(Guid id)
     {
         var cacheKey = $"product:{id}";
         logger.LogInformation("fetching data for key: {CacheKey} from cache.", cacheKey);
-        if (!cache.TryGetValue(cacheKey, out Product? product))
-        {
-            logger.LogInformation("cache miss. fetching data for key: {CacheKey} from database.", cacheKey);
-            product = await context.Products.FindAsync(id);
-            var cacheOptions = new MemoryCacheEntryOptions()
-                .SetAbsoluteExpiration(TimeSpan.FromMinutes(50))
-                .SetSlidingExpiration(TimeSpan.FromMinutes(5))
-                .SetPriority(CacheItemPriority.Normal);
-            logger.LogInformation("setting data for key: {CacheKey} to cache.", cacheKey);
-            cache.Set(cacheKey, product, cacheOptions);
-        }
-        else
-        {
-            logger.LogInformation("cache hit for key: {CacheKey}.", cacheKey);
-        }
-
-        return product;
+        var product = await cache.GetOrSetAsync(cacheKey,
+            async () =>
+            {
+                logger.LogInformation("cache miss. fetching data for key: {CacheKey} from database.", cacheKey);
+                return await context.Products.FindAsync(id)!;
+            })!;
+        return product!;
     }
 
     public async Task<List<Product>> GetAll()
     {
         var cacheKey = "products";
         logger.LogInformation("fetching data for key: {CacheKey} from cache.", cacheKey);
-        if (!cache.TryGetValue(cacheKey, out List<Product>? products))
-        {
-            logger.LogInformation("cache miss. fetching data for key: {CacheKey} from database.", cacheKey);
-            products = await context.Products.ToListAsync();
-            var cacheOptions = new MemoryCacheEntryOptions()
-                .SetAbsoluteExpiration(TimeSpan.FromMinutes(20))// Defines a fixed time after which the cache entry will expire, regardless of how often it is accessed. 
-                .SetSlidingExpiration(TimeSpan.FromMinutes(2))//a 2-minute sliding expiration means that if no one accesses the cache entry within 2 minutes, it will be removed.
-                .SetPriority(CacheItemPriority.NeverRemove)//Sets the priority of retaining the cache entry. This determines the likelihood of the entry being removed when the cache exceeds memory limits.(Normal - default)
-                .SetSize(2048);//Specifies the size of the cache entry. This helps prevent the cache from consuming excessive server resources.
-            logger.LogInformation("setting data for key: {CacheKey} to cache.", cacheKey);
-            cache.Set(cacheKey, products, cacheOptions);
-        }
-        else
-        {
-            logger.LogInformation("cache hit for key: {CacheKey}.", cacheKey);
-        }
+        var cacheOptions = new DistributedCacheEntryOptions()
+            .SetAbsoluteExpiration(TimeSpan.FromMinutes(20))
+            .SetSlidingExpiration(TimeSpan.FromMinutes(2));
 
-        return products;
+        var products = await cache.GetOrSetAsync(
+            cacheKey,
+            async () =>
+            {
+                logger.LogInformation("cache miss. fetching data for key: {CacheKey} from database.", cacheKey);
+                return await context.Products.ToListAsync();
+            },
+            cacheOptions)!;
+        return products!;
     }
 }

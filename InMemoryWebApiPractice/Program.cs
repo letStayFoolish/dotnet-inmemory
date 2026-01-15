@@ -13,6 +13,16 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 });
 builder.Services.AddMemoryCache();
 builder.Services.AddTransient<IProductService, ProductService>();
+builder.Services.AddStackExchangeRedisCache(options =>
+{
+    // It sets the Redis server’s connection string to “localhost”, indicating that the Redis server is running on the local machine.
+    options.Configuration = "localhost";
+    options.ConfigurationOptions = new StackExchange.Redis.ConfigurationOptions()
+    {
+        AbortOnConnectFail = true,//meaning the application will fail immediately if it cannot connect to Redis.
+        EndPoints = { options.Configuration }//property is configured to use the same connection string specified in options.Configuration, ensuring that the endpoint for the Redis server is correctly set.
+    };
+});
 
 var app = builder.Build();
 if (app.Environment.IsDevelopment())
